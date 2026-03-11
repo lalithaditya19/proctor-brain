@@ -35,7 +35,7 @@ active_student = "Unknown_Student"
 
 @app.get("/")
 def home():
-    return {"status": "Proctor Brain is Online", "active_student": active_student}
+    return {"status": "Proctor Brain Online", "student": active_student}
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -46,6 +46,7 @@ async def websocket_endpoint(websocket: WebSocket):
             data = await websocket.receive_text()
             if data.startswith("LOGIN:"):
                 active_student = data.split(":")[1]
+                print(f"🎓 Login: {active_student}")
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
@@ -53,19 +54,16 @@ async def websocket_endpoint(websocket: WebSocket):
 async def trigger_violation(reason: str, filename: str = "no_image"):
     global active_student
     
-    # 1. BROADCAST THE SIGNAL
-    # This sends "HIDE", "SHOW:reason", or "TERMINATE:reason" to the App
-    await manager.broadcast(reason)
+    # 1. BROADCAST: This sends the signal (SHOW, HIDE, TERMINATE) to Electron
+    await manager.broadcast(reason) 
     
-    # 2. LOG TO EVIDENCE ROOM (Only if it's not a 'HIDE' command)
+    # 2. LOGGING: Save to the evidence room if it's a real violation
     if reason != "HIDE":
         violations.append({
-            "student_id": active_student,
-            "reason": reason,
-            "image_file": filename,
+            "student_id": active_student, # Fixed key name
+            "reason": reason, 
             "timestamp": time.strftime("%H:%M:%S")
         })
-    
     return {"status": "signal_sent"}
 
 @app.get("/report", response_class=HTMLResponse)
@@ -84,10 +82,17 @@ async def view_report():
     </head>
     <body>
         <h1>🛡️ Official AI Evidence Room</h1>
-        <table>
+        <table border="1">
             <tr><th>Student ID</th><th>Violation</th><th>Timestamp</th></tr>
     """
+    # Using the correct keys: v['student_id'], v['reason'], v['timestamp']
     for v in reversed(violations):
-        html_content += f"<tr><td><b>{v['student_id']}</b></td><td class='red'>{v['reason']}</td><td>{v['timestamp']}</td></tr>"
+        html_content += f"""
+            <tr>
+                <td><b>{v['student_id']}</b></td>
+                <td class="red">{v['reason']}</td>
+                <td>{v['timestamp']}</td>
+            </tr>
+        """
     html_content += "</table></body></html>"
     return HTMLResponse(content=html_content)
