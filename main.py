@@ -1,14 +1,11 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware # REQUIRED FOR CLOUD
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List
-import os
+import time
 
 app = FastAPI()
 
-# --- 1. THE SECURITY KEY (CORS) ---
-# This allows your Mac to talk to the Render Cloud
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,7 +13,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- 2. WEBSOCKET & DATA STORAGE ---
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -31,17 +27,15 @@ class ConnectionManager:
             try:
                 await connection.send_text(message)
             except:
-                pass # Prevent one broken connection from stopping the rest
+                pass
 
 manager = ConnectionManager()
-violations = [] # Using a list for Render (SQLite gets wiped on restart)
+violations = [] 
 active_student = "Unknown_Student"
 
 @app.get("/")
 def home():
     return {"status": "Proctor Brain is Online", "active_student": active_student}
-
-# --- 3. ROUTES ---
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
@@ -52,26 +46,27 @@ async def websocket_endpoint(websocket: WebSocket):
             data = await websocket.receive_text()
             if data.startswith("LOGIN:"):
                 active_student = data.split(":")[1]
-                print(f"🎓 STUDENT LOGGED IN: {active_student}")
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
 @app.get("/trigger-violation")
 async def trigger_violation(reason: str, filename: str = "no_image"):
     global active_student
-    print(f"🚨 LOGGED: {reason} | Student: {active_student}")
     
-    # Save violation to memory
-    violations.append({
-        "student_id": active_student,
-        "reason": reason,
-        "image_file": filename,
-        "timestamp": "Just Now"
-    })
+    # 1. BROADCAST THE SIGNAL
+    # This sends "HIDE", "SHOW:reason", or "TERMINATE:reason" to the App
+    await manager.broadcast(reason)
     
-    # THIS SENDS THE RED BOX SIGNAL TO ELECTRON
-    await manager.broadcast(f"SHOW_RED_BOX:{reason}")
-    return {"status": "saved"}
+    # 2. LOG TO EVIDENCE ROOM (Only if it's not a 'HIDE' command)
+    if reason != "HIDE":
+        violations.append({
+            "student_id": active_student,
+            "reason": reason,
+            "image_file": filename,
+            "timestamp": time.strftime("%H:%M:%S")
+        })
+    
+    return {"status": "signal_sent"}
 
 @app.get("/report", response_class=HTMLResponse)
 async def view_report():
@@ -92,21 +87,7 @@ async def view_report():
         <table>
             <tr><th>Student ID</th><th>Violation</th><th>Timestamp</th></tr>
     """
-    
     for v in reversed(violations):
-        html_content += f"""
-            <tr>
-                <td><b>{v['student_id']}</b></td>
-                <td class="red">{v['reason']}</td>
-                <td>{v['timestamp']}</td>
-            </tr>
-        """
-        
+        html_content += f"<tr><td><b>{v['student_id']}</b></td><td class='red'>{v['reason']}</td><td>{v['timestamp']}</td></tr>"
     html_content += "</table></body></html>"
     return HTMLResponse(content=html_content)
-
-@app.get("/clear-db")
-async def clear_database():
-    global violations
-    violations = []
-    return {"status": "List wiped clean!"}
